@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <stddef.h>
 #include <device.h>
+#include <random/rand32.h>
 #include <drivers/gpio.h>
 #include <sys/printk.h>
 #include <zephyr.h>
@@ -22,6 +23,10 @@
 
 static struct bt_conn *default_conn;
 
+static struct bt_gatt_write_params bgwp;
+static uint8_t light_off_cmd[] = {0x0A, 0x10, 0x00, 0x01, 0x00, 0x01, 0x02, 0x00, 0x01, 0x15, 0x71};
+static uint8_t light_on_cmd[] = {0x0A, 0x10, 0x00, 0x01, 0x00, 0x01, 0x02, 0x00, 0x01, 0x15, 0x71}; //, 0x15, 0x71}; // on
+
 #define COWBOY_ON_OFF_CHARACTERISTIC BT_UUID_DECLARE_128(BT_UUID_128_ENCODE(0XC0B0A001, 0X18EB, 0X499D, 0XB266, 0X2F2910744274))
 #define COWBOY_UART_WRITE_CHARACTERSTIC BT_UUID_DECLARE_128(BT_UUID_128_ENCODE(0X6E400002, 0XB5A3, 0XF393, 0XE0A9, 0XE50E24DCCA9E))
 
@@ -29,7 +34,16 @@ static struct bt_gatt_discover_params discover_params;
 static struct bt_gatt_subscribe_params subscribe_params;
 static bt_addr_le_t MY_COWBOY_ADDRESS;
 
-static int when_connected = 0;
+#define DO_NOTHING 0
+#define DO_TURN_ON 1
+#define DO_TURN_OFF 2
+#define DO_TOGGLE_LIGHTS 3
+#define DO_RESET_SPEED_LIMIT 4
+#define DO_CUSTOM_SPEED_LIMIT 5
+
+
+
+static uint8_t when_connected = DO_NOTHING;
 static int shutting_down = 0;
 static int on_off_light = 1;
 
@@ -51,10 +65,8 @@ static struct gpio_dt_spec led2 = GPIO_DT_SPEC_GET_OR(DT_ALIAS(led2), gpios, {0}
 static struct gpio_dt_spec led4 = GPIO_DT_SPEC_GET_OR(DT_ALIAS(led3), gpios, {0});
 */
 
-
-
-static void flash(int duration, int speed) {
-    for (int i = 0; i < duration; i++) {
+static void flash(int times, int speed) {
+    for (int i = 0; i < times; i++) {
         gpio_pin_set_dt(&led2, i % 2);
         k_sleep(K_MSEC(speed));
     }
@@ -62,10 +74,10 @@ static void flash(int duration, int speed) {
 }
 
 uint16_t CRC16 (const uint8_t *nData, uint16_t wLength) {
-
+    
     // We have to use CRC-16 (Modbus), see https://www.lammertbies.nl/comm/info/crc-calculation
     // This method is taken from https://www.modbustools.com/modbus_crc16.html
-
+    
     static const uint16_t wCRCTable[] = {
         0X0000, 0XC0C1, 0XC181, 0X0140, 0XC301, 0X03C0, 0X0280, 0XC241,
         0XC601, 0X06C0, 0X0780, 0XC741, 0X0500, 0XC5C1, 0XC481, 0X0440,
@@ -133,24 +145,24 @@ static void shut_down() {
         k_sleep(K_MSEC(100));
     }
     flash(20, 50);
-
-    nrf_gpio_cfg_input(DT_GPIO_PIN(DT_NODELABEL(button0), gpios), NRF_GPIO_PIN_PULLUP);
+    
+	nrf_gpio_cfg_input(DT_GPIO_PIN(DT_NODELABEL(button0), gpios), NRF_GPIO_PIN_PULLUP);
     nrf_gpio_cfg_sense_set(DT_GPIO_PIN(DT_NODELABEL(button0), gpios), NRF_GPIO_PIN_SENSE_LOW);
 
     nrf_gpio_cfg_input(DT_GPIO_PIN(DT_NODELABEL(button1), gpios), NRF_GPIO_PIN_PULLUP);
     nrf_gpio_cfg_sense_set(DT_GPIO_PIN(DT_NODELABEL(button1), gpios), NRF_GPIO_PIN_SENSE_LOW);
 
-    nrf_gpio_cfg_input(DT_GPIO_PIN(DT_NODELABEL(button2), gpios), NRF_GPIO_PIN_PULLUP);
+  	nrf_gpio_cfg_input(DT_GPIO_PIN(DT_NODELABEL(button2), gpios), NRF_GPIO_PIN_PULLUP);
     nrf_gpio_cfg_sense_set(DT_GPIO_PIN(DT_NODELABEL(button2), gpios), NRF_GPIO_PIN_SENSE_LOW);
 
     pm_power_state_force(0u, (struct pm_state_info){PM_STATE_SOFT_OFF, 0, 0});
     k_sleep(K_MSEC(100));
     gpio_pin_set_dt(&led2, 1);
 
-    printk("ERROR: System off failed\n");
-    while (true) {
-        /* spin to avoid fall-off behavior */
-    }
+	printk("ERROR: System off failed\n");
+	while (true) {
+		/* spin to avoid fall-off behavior */
+	}
 }
 
 static void send_command_with_checksum(uint8_t data[]) {
@@ -159,7 +171,7 @@ static void send_command_with_checksum(uint8_t data[]) {
     memcpy(final_data, data, 9);
     uint16_t crc = CRC16(final_data, 9);
     memcpy(final_data + 9, &crc, 2);
-    int err = bt_gatt_write_without_response(default_conn, 0x37, final_data, 11, false);
+    int err = bt_gatt_write_without_response(default_conn, 0x38, final_data, 11, false);
     if (err) {
         flash(5, 500);
         shut_down();
@@ -169,22 +181,52 @@ static void send_command_with_checksum(uint8_t data[]) {
     k_sleep(K_MSEC(100));
 }
 
+static void ignore(struct bt_conn *conn, uint8_t err, struct bt_gatt_write_params *params) {
+}
 
 
 static void bike_lights_off() {
     printk("turning lights off\n");
-    uint8_t d[] = {0x0A, 0x10, 0x00, 0x01, 0x00, 0x01, 0x02, 0x00, 0x00, 0xd4, 0xb1}; // off
-    bt_gatt_write_without_response(default_conn, 0x38, d, 11, false);
-
-
-//    send_command_with_checksum(d);
+    uint8_t d[] = {0x0A, 0x10, 0x00, 0x01, 0x00, 0x01, 0x02, 0x00, 0x00}; // off
+        
+    
+    
+    //bgwp.data = light_off_cmd;
+    //bgwp.length = 11;
+    //bgwp.func = ignore;
+    //bgwp.offset = 0;
+    //bgwp.handle = 0x38;
+    //int err = bt_gatt_write(default_conn, &bgwp);
+    //if (err) {
+    //    shut_down();
+    //    return;
+    //}
+    //bt_gatt_write_without_response(default_conn, 0x38, d, 11, false);
+        
+        
+    send_command_with_checksum(d);
 }
 
 static void bike_lights_on() {
     printk("turning lights on\n");
-    uint8_t d[] = {0x0A, 0x10, 0x00, 0x01, 0x00, 0x01, 0x02, 0x00, 0x01, 0x15, 0x71}; //, 0x15, 0x71}; // on
-    //send_command_with_checksum(d);
-    bt_gatt_write_without_response(default_conn, 0x38, d, 11, false);
+    uint8_t d[] = {0x0A, 0x10, 0x00, 0x01, 0x00, 0x01, 0x02, 0x00, 0x01}; //, 0x15, 0x71}; // on
+    send_command_with_checksum(d);
+    //bt_gatt_write_without_response(default_conn, 0x38, d, 11, false);
+    //struct bt_gatt_write_params bgwp;
+    
+    //bgwp.data = light_on_cmd;
+    //bgwp.length = 11;
+    //bgwp.func = ignore;
+    //bgwp.offset = 0;
+    //bgwp.handle = 0x38;
+    //bt_gatt_write(default_conn, &bgwp);
+
+    //int err = bt_gatt_write(default_conn, &bgwp);
+    //if (err) {
+    //    shut_down();
+    //    return;
+    //}
+
 }
 
 static void set_bike_speed_limit(unsigned int speed_limit) {
@@ -194,53 +236,84 @@ static void set_bike_speed_limit(unsigned int speed_limit) {
     }
     printk("setting speed to %u\n", speed_limit);
     uint8_t d[] = {10, 16, 0, 4, 0, 1, 2, 0, speed_limit};
-    send_command_with_checksum(&d);
+    send_command_with_checksum(d);
 }
 
 
 
 static void print_chrc_props(uint8_t properties)
 {
-    printk(" : ");
+	printk(" : ");
 
-    if (properties & BT_GATT_CHRC_BROADCAST) {
-        printk("[bcast]");
-    }
+	if (properties & BT_GATT_CHRC_BROADCAST) {
+		printk("[bcast]");
+	}
 
-    if (properties & BT_GATT_CHRC_READ) {
-        printk("[read]");
-    }
+	if (properties & BT_GATT_CHRC_READ) {
+		printk("[read]");
+	}
 
-    if (properties & BT_GATT_CHRC_WRITE) {
-        printk("[write]");
-    }
+	if (properties & BT_GATT_CHRC_WRITE) {
+		printk("[write]");
+	}
 
-    if (properties & BT_GATT_CHRC_WRITE_WITHOUT_RESP) {
-        printk("[write w/w rsp]");
-    }
+	if (properties & BT_GATT_CHRC_WRITE_WITHOUT_RESP) {
+		printk("[write w/w rsp]");
+	}
 
-    if (properties & BT_GATT_CHRC_NOTIFY) {
-        printk("[notify]");
-    }
+	if (properties & BT_GATT_CHRC_NOTIFY) {
+		printk("[notify]");
+	}
 
-    if (properties & BT_GATT_CHRC_INDICATE) {
-        printk("[indicate]");
-    }
+	if (properties & BT_GATT_CHRC_INDICATE) {
+		printk("[indicate]");
+	}
 
-    if (properties & BT_GATT_CHRC_AUTH) {
-        printk("[auth]");
-    }
+	if (properties & BT_GATT_CHRC_AUTH) {
+		printk("[auth]");
+	}
 
-    if (properties & BT_GATT_CHRC_EXT_PROP) {
-        printk("[ext prop]");
-    }
+	if (properties & BT_GATT_CHRC_EXT_PROP) {
+		printk("[ext prop]");
+	}
 
-    printk("\n");
+	printk("\n");
+}
+
+
+static uint8_t notify_func(struct bt_conn *conn,struct bt_gatt_subscribe_params *params, const void *data, uint16_t length)
+{
+	if (!data) {
+		printk("Ubsubscribed\n");
+		params->value_handle = 0;
+		return BT_GATT_ITER_STOP;
+	}
+
+	printk("Notification: data %p length %u\n", data, length);
+
+	return BT_GATT_ITER_CONTINUE;
+}
+
+static void write_func(struct bt_conn *conn, uint8_t conn_err,  struct bt_gatt_subscribe_params *params)
+{
+	printk("Write callback\n");
 }
 
 static void handles_found_lets_really_rock() {
-    gpio_pin_set_dt(&led2, 1);
-    if (when_connected == 1) {
+    
+//    subscribe_params.flags = 0x00;
+//    subscribe_params.node = 0x00;
+    subscribe_params.ccc_handle = 0x3b;
+    subscribe_params.notify = &notify_func;
+    subscribe_params.value = BT_GATT_CCC_NOTIFY;
+    subscribe_params.value_handle = 0x3a;
+    subscribe_params.write  = &write_func;
+    bt_gatt_subscribe(default_conn, &subscribe_params);
+    k_sleep(K_MSEC(100));
+    
+    
+    gpio_pin_set_dt(&led2, 1); 
+    if (when_connected == DO_TURN_ON) {
         bike_turn_on();
         //for (int i = 0; i < 3; i++) {
         //    bike_turn_off();
@@ -256,49 +329,50 @@ static void handles_found_lets_really_rock() {
         //    gpio_pin_set_dt(&led2, 1);
         //    k_sleep(K_MSEC(2000));
         //}
-    } else if (when_connected == 2) {
+    } else if (when_connected == DO_TURN_OFF) {
         bike_turn_off();
-    } else if (when_connected == 3) {
-        bike_lights_off();
-        k_sleep(K_SECONDS(1));
-        bike_lights_on();
-        k_sleep(K_SECONDS(1));
-        bike_lights_off();
-        k_sleep(K_SECONDS(1));
-        bike_lights_on();
-        k_sleep(K_SECONDS(1));
-        bike_lights_off();
-        k_sleep(K_SECONDS(1));
-        bike_lights_on();
-        k_sleep(K_SECONDS(1));
+    } else if (when_connected == DO_TOGGLE_LIGHTS) {
+        // as we can't detect this yet, do random...
+        uint32_t rand = sys_rand32_get();
+        if (rand & 1) {
+            bike_lights_on();
+        } else {
+            bike_lights_off();
+        }
+    } else if (when_connected == DO_RESET_SPEED_LIMIT) {
+        set_bike_speed_limit(25);
+        flash(5, 300);
+    } else if (when_connected == DO_CUSTOM_SPEED_LIMIT) {
+        set_bike_speed_limit(20);
+        flash(15, 100);
     }
     shut_down();
 }
 
 
-static uint8_t discover_func(struct bt_conn *conn, const struct bt_gatt_attr *attr, struct bt_gatt_discover_params *params)
+static uint8_t discover_func(struct bt_conn *conn, const struct bt_gatt_attr *attr,	struct bt_gatt_discover_params *params)
 {
-    int err;
+	int err;
 
-    if (!attr) {
-        printk("Discover complete\n");
-        (void)memset(params, 0, sizeof(*params));
+	if (!attr) {
+		printk("Discover complete\n");
+		(void)memset(params, 0, sizeof(*params));
         handles_found_lets_really_rock();
-        return BT_GATT_ITER_STOP;
-    }
-    struct bt_gatt_service_val *gatt_service;
-    struct bt_gatt_chrc *gatt_chrc;
+		return BT_GATT_ITER_STOP;
+	}
+	struct bt_gatt_service_val *gatt_service;
+	struct bt_gatt_chrc *gatt_chrc;
     char str[37];
     char str2[37];
 
     gatt_chrc = attr->user_data;
-    bt_uuid_to_str(gatt_chrc->uuid, str, sizeof(str));
+	bt_uuid_to_str(gatt_chrc->uuid, str, sizeof(str));
     bt_uuid_to_str(attr->uuid, str2, sizeof(str2));
+    
+	printk("[ATTRIBUTE] handle %u - %s - %s", attr->handle, str2, str);
+    
 
-    printk("[ATTRIBUTE] handle %u - %s - %s", attr->handle, str2, str);
-
-
-
+    
     print_chrc_props(gatt_chrc->properties);
     int h = 0;
 
@@ -312,71 +386,71 @@ static uint8_t discover_func(struct bt_conn *conn, const struct bt_gatt_attr *at
     }
     //    k_sleep(K_SECONDS(1));
 
-/*  if (!bt_uuid_cmp(discover_params.uuid, BT_UUID_HRS)) {
-        memcpy(&uuid, BT_UUID_HRS_MEASUREMENT, sizeof(uuid));
-        discover_params.uuid = &uuid.uuid;
-        discover_params.start_handle = attr->handle + 1;
-        discover_params.type = BT_GATT_DISCOVER_CHARACTERISTIC;
+/*	if (!bt_uuid_cmp(discover_params.uuid, BT_UUID_HRS)) {
+		memcpy(&uuid, BT_UUID_HRS_MEASUREMENT, sizeof(uuid));
+		discover_params.uuid = &uuid.uuid;
+		discover_params.start_handle = attr->handle + 1;
+		discover_params.type = BT_GATT_DISCOVER_CHARACTERISTIC;
 
-        err = bt_gatt_discover(conn, &discover_params);
-        if (err) {
-            printk("Discover failed (err %d)\n", err);
-        }
-    } else if (!bt_uuid_cmp(discover_params.uuid, BT_UUID_HRS_MEASUREMENT)) {
-        memcpy(&uuid, BT_UUID_GATT_CCC, sizeof(uuid));
-        discover_params.uuid = &uuid.uuid;
-        discover_params.start_handle = attr->handle + 2;
-        discover_params.type = BT_GATT_DISCOVER_DESCRIPTOR;
-        subscribe_params.value_handle = bt_gatt_attr_value_handle(attr);
+		err = bt_gatt_discover(conn, &discover_params);
+		if (err) {
+			printk("Discover failed (err %d)\n", err);
+		}
+	} else if (!bt_uuid_cmp(discover_params.uuid, BT_UUID_HRS_MEASUREMENT)) {
+		memcpy(&uuid, BT_UUID_GATT_CCC, sizeof(uuid));
+		discover_params.uuid = &uuid.uuid;
+		discover_params.start_handle = attr->handle + 2;
+		discover_params.type = BT_GATT_DISCOVER_DESCRIPTOR;
+		subscribe_params.value_handle = bt_gatt_attr_value_handle(attr);
 
-        err = bt_gatt_discover(conn, &discover_params);
-        if (err) {
-            printk("Discover failed (err %d)\n", err);
-        }
-    } else {
-        subscribe_params.notify = notify_func;
-        subscribe_params.value = BT_GATT_CCC_NOTIFY;
-        subscribe_params.ccc_handle = attr->handle;
+		err = bt_gatt_discover(conn, &discover_params);
+		if (err) {
+			printk("Discover failed (err %d)\n", err);
+		}
+	} else {
+		subscribe_params.notify = notify_func;
+		subscribe_params.value = BT_GATT_CCC_NOTIFY;
+		subscribe_params.ccc_handle = attr->handle;
 
-        err = bt_gatt_subscribe(conn, &subscribe_params);
-        if (err && err != -EALREADY) {
-            printk("Subscribe failed (err %d)\n", err);
-        } else {
-            printk("[SUBSCRIBED]\n");
-        }
+		err = bt_gatt_subscribe(conn, &subscribe_params);
+		if (err && err != -EALREADY) {
+			printk("Subscribe failed (err %d)\n", err);
+		} else {
+			printk("[SUBSCRIBED]\n");
+		}
 
-        return BT_GATT_ITER_STOP;
-    }
+		return BT_GATT_ITER_STOP;
+	}
     */
 
-    return BT_GATT_ITER_CONTINUE;
+	return BT_GATT_ITER_CONTINUE;
 }
 
 
 
 static void connected(struct bt_conn *conn, uint8_t conn_err)
 {
-    int err;
-    if (conn_err) {
-        bt_conn_unref(default_conn);
-        default_conn = NULL;
+	int err;
+	if (conn_err) {
+		bt_conn_unref(default_conn);
+		default_conn = NULL;
         flash(10, 500);
         shut_down();
-        return;
-    }
-    printk("Connected\n");
+		return;
+	}
+	printk("Connected\n");
     //flash(100, 50);
 
 /*
     GET SOME INFO FROM THE CONNECTION
-
+    
     struct bt_conn_info conn_info;
-    bt_conn_get_info(default_conn, &conn_info);
-    printk("bt type is LE: %d\n", conn_info.type == BT_CONN_TYPE_LE || conn_info.type == BT_CONN_TYPE_BR);
-    printk("bt role is central: %d\n", conn_info.role == BT_CONN_ROLE_CENTRAL);
+	bt_conn_get_info(default_conn, &conn_info);
+	printk("bt type is LE: %d\n", conn_info.type == BT_CONN_TYPE_LE || conn_info.type == BT_CONN_TYPE_BR);
+	printk("bt role is central: %d\n", conn_info.role == BT_CONN_ROLE_CENTRAL);
 
 */
-    err = bt_conn_set_security(default_conn, BT_SECURITY_L3);
+	err = bt_conn_set_security(default_conn, BT_SECURITY_L3);
     if (err) {
         printk("Failed to set security (err %u)\n", err);
         shut_down();
@@ -386,23 +460,23 @@ static void connected(struct bt_conn *conn, uint8_t conn_err)
 
 static void disconnected(struct bt_conn *conn, uint8_t reason)
 {
-    char addr[BT_ADDR_LE_STR_LEN];
+	char addr[BT_ADDR_LE_STR_LEN];
 
-    bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
+	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
 
-    printk("Disconnected: %s (reason 0x%02x)\n", addr, reason);
+	printk("Disconnected: %s (reason 0x%02x)\n", addr, reason);
     //gpio_pin_set_dt(&led1, 0);
 
-    if (default_conn == conn) {
-        bt_conn_unref(default_conn);
-        default_conn = NULL;
-    }
+	if (default_conn == conn) {
+    	bt_conn_unref(default_conn);
+    	default_conn = NULL;
+	}
     shut_down();
 }
 
 static void passkey_entry(struct bt_conn *conn)
 {
-    printk("passkey requested, sending it\n");
+	printk("passkey requested, sending it\n");
     //gpio_pin_set_dt(&led4, 1);
     bt_conn_auth_passkey_entry(conn, YOUR_6_DIGIT_PIN_HERE);
 //    flash(4, 1000);
@@ -410,19 +484,19 @@ static void passkey_entry(struct bt_conn *conn)
 
 static void pairing_complete(struct bt_conn *conn, bool bonded)
 {
-    printk("Pairing complete\n");
-    if (bonded) {
-        printk("  ALSO BONDED\n");
-    }
+	printk("Pairing complete\n");
+	if (bonded) {
+		printk("  ALSO BONDED\n");
+	}
 }
 static void pairing_failed(struct bt_conn *conn, enum bt_security_err reason)
 {
-    printk("pairing failed\n");
+	printk("pairing failed\n");
 }
 
 static void cancel(struct bt_conn *conn)
 {
-    printk("pairing cancel\n");
+	printk("pairing cancel\n");
 }
 
 static void connection_ready_lets_rock() {
@@ -442,31 +516,31 @@ static void connection_ready_lets_rock() {
 
 static void security_changed(struct bt_conn *conn, bt_security_t level, enum bt_security_err err)
 {
-    printk("security changed, level is now: %u\n", level);
-    if (level == BT_SECURITY_L3 || level == BT_SECURITY_L4) {
-        //connection_ready_lets_rock();
-        handles_found_lets_really_rock();
+	printk("security changed, level is now: %u\n", level);
+	if (level == BT_SECURITY_L3 || level == BT_SECURITY_L4) {
+        connection_ready_lets_rock();
+        //handles_found_lets_really_rock();
         return;
     }
 //    shut_down();
 }
 
 static struct bt_conn_auth_cb conn_auth_callbacks = {
-    .pairing_complete = pairing_complete,
-    .passkey_entry = passkey_entry,
-    .pairing_failed = pairing_failed,
-    .cancel = cancel,
+	.pairing_complete = pairing_complete,
+	.passkey_entry = passkey_entry,
+	.pairing_failed = pairing_failed,
+	.cancel = cancel,
 };
 
 static struct bt_conn_cb conn_callbacks = {
-    .connected = connected,
-    .disconnected = disconnected,
-    .security_changed = security_changed,
+	.connected = connected,
+	.disconnected = disconnected,
+	.security_changed = security_changed,
 };
 /*BT_CONN_CB_DEFINE(conn_callbacks) = {
-    .connected = connected,
-    .disconnected = disconnected,
-    .security_changed = security_changed,
+	.connected = connected,
+	.disconnected = disconnected,
+	.security_changed = security_changed,
 };*/
 
 void initialize_buttons() {
@@ -496,12 +570,12 @@ void initialize_buttons() {
 //    gpio_pin_interrupt_configure_dt(&button1, GPIO_INT_EDGE_TO_ACTIVE);
 //    gpio_init_callback(&button1_cb_data, button1_pressed, BIT(button1.pin));
 //    gpio_add_callback(button1.port, &button1_cb_data);
-
+    
     gpio_pin_configure_dt(&button2, GPIO_INPUT);
 //    gpio_pin_interrupt_configure_dt(&button2, GPIO_INT_EDGE_TO_ACTIVE);
 //    gpio_init_callback(&button2_cb_data, button2_pressed, BIT(button2.pin));
 //    gpio_add_callback(button3.port, &button2_cb_data);
-
+    
     gpio_pin_configure_dt(&button3, GPIO_INPUT);
 //    gpio_pin_interrupt_configure_dt(&button3, GPIO_INT_EDGE_TO_ACTIVE);
 //    gpio_init_callback(&button3_cb_data, button3_pressed, BIT(button3.pin));
@@ -524,40 +598,42 @@ void initialize_led() {
 
 void main(void)
 {
-    int err;
-    initialize_led();
+	int err;
+    initialize_led();   
     initialize_buttons();
-
+    bt_set_bondable(false);
+    
     int btn1_pressed = gpio_pin_get_dt(&button1);
-    int btn2_pressed = gpio_pin_get_dt(&button2);// || true ; // HACK
+    int btn2_pressed = gpio_pin_get_dt(&button2);
     int btn3_pressed = gpio_pin_get_dt(&button3);
 
-    //flash(4, 500);
-
+    when_connected = DO_NOTHING;
     gpio_pin_set_dt(&led2, 0);
-    //flash(4, 500);
-
-    if (btn1_pressed) {
-        when_connected = 1;
-        //gpio_pin_set_dt(&led1, 1);
-    } else if (btn2_pressed) {
-        when_connected = 2;
-        //gpio_pin_set_dt(&led2, 1);
+    if (btn2_pressed) {
+        k_sleep(K_MSEC(1000));
+        btn1_pressed = gpio_pin_get_dt(&button1);
+        btn3_pressed = gpio_pin_get_dt(&button3);
+        
+        if (btn1_pressed) {
+            when_connected = DO_RESET_SPEED_LIMIT;
+        } else if (btn3_pressed) {
+            when_connected = DO_CUSTOM_SPEED_LIMIT;
+        } else {
+            when_connected = DO_TOGGLE_LIGHTS;
+        }
     } else if (btn3_pressed) {
-        when_connected = 3;
-        //gpio_pin_set_dt(&led3, 1);
+        when_connected = DO_TURN_ON;
+    } else if (btn1_pressed) {
+        when_connected = DO_TURN_OFF;
     }
-
-    if (btn1_pressed || btn2_pressed || btn3_pressed) {
+    
+    if (when_connected) {
          bt_conn_cb_register(&conn_callbacks);
-
-//      settings_load();
+//        settings_subsys_init();
+//    	settings_load();
         err = bt_enable(NULL);
-
-
-
-
-        if (err) {
+        
+    	if (err) {
             int k = err * -1;
             err = k;
             if (k > 0) {
@@ -567,48 +643,43 @@ void main(void)
                 printk("Bluetooth init failed (err %d %d)\n", k, err);
                 shut_down();
             }
-            printk("Bluetooth init failed (err %d %d)\n", k, err);
+    		printk("Bluetooth init failed (err %d %d)\n", k, err);
+    		return;
+    	}
+
+    	err = bt_addr_le_from_str("XX:XX:XX:XX:XX:XX", "random", &MY_COWBOY_ADDRESS);
+    	if (err) {
+    		printk("Error converting my bike (err %d)\n", err);
+            shut_down();
+    		return;
+    	}
+
+    	err = bt_conn_auth_cb_register(&conn_auth_callbacks);
+    	if (err) {
+    		printk("Error registering auth cv (err %d)\n", err);
+            shut_down();
             return;
-        }
+    	}
 
-        err = bt_addr_le_from_str("YOUR COWBOY MAC HERE", "random", &MY_COWBOY_ADDRESS);
-        if (err) {
-            printk("Error converting my bike (err %d)\n", err);
+    	struct bt_le_conn_param *param;
+    	param = BT_LE_CONN_PARAM_DEFAULT;
+    	err = bt_conn_le_create(&MY_COWBOY_ADDRESS, BT_CONN_LE_CREATE_CONN, param, &default_conn);
+    	if (err) {
+    		printk("Create conn failed (err %d)\n", err);
+            shut_down();
             return;
-        }
+    	}
 
-
-        err = bt_conn_auth_cb_register(&conn_auth_callbacks);
-        if (err) {
-            printk("Error registering auth cv (err %d)\n", err);
-            return;
-        }
-
-
-        struct bt_le_conn_param *param;
-        param = BT_LE_CONN_PARAM_DEFAULT;
-        err = bt_conn_le_create(&MY_COWBOY_ADDRESS, BT_CONN_LE_CREATE_CONN, param, &default_conn);
-        if (err) {
-            printk("Create conn failed (err %d)\n", err);
-            return;
-        }
-
-        printk("Bluetooth initialized\n");
+    	printk("Bluetooth initialized\n");
 //        flash(800, 6);
         gpio_pin_set_dt(&led2, 1);
-        for (int i = 0; i < 6000; i++) {
+        for (int i = 0; i < 60; i++) {
             k_sleep(K_MSEC(100));
             k_yield();
         }
         shut_down();
         return;
-
-        //while (!shutting_down) {
-        //    //gpio_pin_set_dt(&led3, 1);
-        //}
-        //return;
-
     }
-
+    
     shut_down();
 }
