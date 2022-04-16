@@ -27,6 +27,15 @@ You will need the mac address and the 6 digit passkey for your bike. This will b
 
 For flashing the SoC you need an NRF52-dk. You can reportedly also use an esp32 to flash, but I've not used it.
 
+## What does it do?
+
+* Long-press on unlock -> turns bike on
+* Long-press on lock -> turns bike off
+* Long-press trunk -> toggle light on/off
+* Long-press trunk + long-press unlock -> go to 24 km/h speed limit
+* Long-press trunk + long-press lock -> go to 25 km/h speed limit
+
+Once the action is done, the LED will flash rapidly and the SoC will shut down. You can stop holding the button when you see the flashing.
 
 ## Costs
 
