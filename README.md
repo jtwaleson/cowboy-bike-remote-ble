@@ -9,6 +9,8 @@ This is a work in progress, the code is terrible, I have very little electronics
 
 This prototype works and I'm using it now.
 
+It's using diodes to only power the SoC when you keep pressing a key.
+
 ![P1](p1.JPG)
 
 ![P2](p2.JPG)
@@ -21,11 +23,29 @@ The next step is to create a proper PCB. You can find the data below. The board 
 
 There are two samples, one for ESP32 ( sketch_esp32_cowboy.ino ) which I used to get started. There is also one for the NRF Connect SDK (main.c) which I am using. In the key fob I started using an NRF52805 module (the smallest and cheapest) which works well. It fits better than the BT832A which I used previously.
 
-Youl will need the mac address and the 6 digit passkey for your bike. This will be hardcoded in the firmware. Using 3 buttons a passkey entry will be tough.
+You will need the mac address and the 6 digit passkey for your bike. This will be hardcoded in the firmware. Using 3 buttons a passkey entry will be tough.
+
+For flashing the SoC you need an NRF52-dk. You can reportedly also use an esp32 to flash, but I've not used it.
+
+
+## Costs
+
+* Lots of time...
+* Key enclosure: 6 EUR
+* PCB: 0.5 EUR
+* BC805M SoC: 4 EUR
+* SMD parts: 0.5 EUR
+* Sticker: 1 EUR (if you order 50 pieces)
+
+Total: 12 EUR.
+
+So one key is about Naturally there are also S&H costs. In low volumes this is about 2 times the component costs.
 
 ## Schematic
 
 NOTE: The PCB design is untested, I'm waiting for the shipments.
+
+I designed this using easyeda.com and ordered the PCB and components through their site.
 
 In the pcb-design folder you'll find the Gerber files for the enclosure.
 
