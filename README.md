@@ -54,6 +54,8 @@ So one key is about Naturally there are also S&H costs. In low volumes this is a
 
 NOTE: The PCB design is untested, I'm waiting for the shipments.
 
+UPDATE: the PCB has some minor problems, like the pin-hole alignment in the bottom left corner, and the height of some of the switches is wrong for some reason. Other than that, it seems to be working fine.
+
 I designed this using easyeda.com and ordered the PCB and components through their site.
 
 In the pcb-design folder you'll find the Gerber files for the enclosure.
