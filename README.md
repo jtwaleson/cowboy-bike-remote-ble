@@ -66,6 +66,16 @@ In the pcb-design folder you'll find the Gerber files for the enclosure.
 ![Design](pcb-design/PCB_PCB_Cowboy-key_2022-04-16.svg)
 
 
+TO DO:
+- order a reference PCB from a blank key so we can see the thickness, size of the buttons, proper alignment etc.
+- re-do the design in EasyEDA, I didn't save it last time...
+- the rear hole is not properly aligned and the rear end extends just a bit (0.1 - 0.2mm) too much
+- the diodes do not fit in a blank case, reposition them
+- the bc805m module can fit but needs better alignment. it has 0.05mm wiggle room in the ideal spot
+- for the programming it'd be great if there is a flat/flex cable debug port
+- the diode design doesn't work on the PCB. How does it work in the prototype?? (maybe it's the white vs red led?)
+- measure the new beta version and see how long the battery lasts..
+
 ## How can you help?
 
 If you see stupid mistakes or other room for improvement, let me know! I'm a n00b.
