@@ -76,6 +76,32 @@ TO DO:
 - the diode design doesn't work on the PCB. How does it work in the prototype?? (maybe it's the white vs red led?)
 - measure the new beta version and see how long the battery lasts..
 
+## Original board measurements
+
+For reference I ordered an original VW key fob PCB. Here are the measurements of that:
+- board thickness: 1mm
+- width: 36mm
+- height: 21.1mm
+- height short: 10.6mm
+- width short: 30mm
+- button height: 3.5mm
+- battery spring height: 1.9mm
+
+![Original PCB Back](original-pcb-back.jpg)
+![Original PCB Back - Measurements 1](original-pcb-back-with-measurements-pt1.jpg)
+![Original PCB Front](original-pcb-front.jpg)
+![Original PCB Front - Measurements 1](original-pcb-front-with-measurements-pt1.jpg)
+![Original PCB Front - Measurements 2](original-pcb-front-with-measurements-pt2.jpg)
+![Original PCB Front - Measurements 3](original-pcb-front-with-measurements-pt3.jpg)
+
+Here it is in the enclosure:
+
+![Original PCB fit](original-pcb-in-enclosure.jpg)
+
+![Original PCB fit back](original-pcb-back-enclosure.jpg)
+
+Note that it as about 1mm clearance at the edge. We need that space for our own version as the BC805m needs all the space it can get.
+
 ## How can you help?
 
 If you see stupid mistakes or other room for improvement, let me know! I'm a n00b.
